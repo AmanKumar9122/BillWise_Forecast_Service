@@ -1,16 +1,32 @@
 # main.py
-from fastapi import FastAPI, HTTPException, Query
+# for request parameters and response models
+from fastapi import FastAPI, HTTPException, Query 
+
+# CORS middleware
 from fastapi.middleware.cors import CORSMiddleware
+
+# data models
 from pydantic import BaseModel
+
 from typing import List
 import datetime
 import requests
 import pandas as pd
 import numpy as np
+
+# environment
 import os
+
+# ML model
 from sklearn.ensemble import RandomForestRegressor
+
+# model persistence
 from joblib import dump, load
+
+# async HTTP client
 import httpx
+
+# import price endpoint with async cached function
 from price_endpoint import get_price_async
 
 # Config
@@ -18,8 +34,10 @@ BILLWISE_BASE = os.environ.get("BILLWISE_BASE", "http://localhost:8080")
 MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
 os.makedirs(MODELS_DIR, exist_ok=True)
 
+# FastAPI app
 app = FastAPI(title="BillWise Forecast Service (Real Model)")
 
+# CORS setup
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -28,13 +46,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Response Models ------------------------
+# Response Models ------------------------------------------------
 
+# Daily Prediction Model 
 class DailyPrediction(BaseModel):
     date: datetime.date
     predictedUnits: int
     predictedRevenue: float
 
+# Overall Prediction Response Model
 class PredictionResponse(BaseModel):
     productId: int
     generatedAt: datetime.date
@@ -44,13 +64,17 @@ class PredictionResponse(BaseModel):
 
 # Helper utilities ------------------------------------------------
 
+# Fetch monthly sales data from BillWise
 def fetch_monthly_sales(product_id: int):
     """
     Pull monthly aggregated sales from BillWise:
     GET /api/ai/monthly-sales/{productId}
     expected format: [{ "date": "YYYY-MM", "unitsSold": 120 }, ...]
     """
+    # make request
     url = f"{BILLWISE_BASE}/api/ai/monthly-sales/{product_id}"
+
+    # Use requests for simplicity here
     resp = requests.get(url, timeout=10)
     if resp.status_code == 204:
         return []
@@ -58,6 +82,9 @@ def fetch_monthly_sales(product_id: int):
         raise HTTPException(status_code=502, detail=f"Failed to fetch sales from BillWise: {resp.status_code}")
     return resp.json()
 
+# Prepare DataFrame from fetched data --------------------------------
+
+# Convert list of {"date":"YYYY-MM","unitsSold":N} -> pandas Series indexed by Period (monthly).
 def prepare_dataframe(monthly_points):
     """
     Convert list of {"date":"YYYY-MM","unitsSold":N} -> pandas Series indexed by Period (monthly).
@@ -78,6 +105,7 @@ def prepare_dataframe(monthly_points):
                 dt = pd.to_datetime(d)
                 dt = dt.replace(day=1)
         except Exception:
+            # fallback
             dt = pd.to_datetime(d, errors='coerce')
             if pd.isna(dt):
                 continue
@@ -85,25 +113,50 @@ def prepare_dataframe(monthly_points):
         rows.append((dt, int(r.get("unitsSold", 0))))
     if not rows:
         return pd.Series(dtype=float)
+    
+    # create DataFrame
     df = pd.DataFrame(rows, columns=["ds", "y"])
+
+    # sort by date and drop duplicates (keep last)
     df = df.sort_values("ds").drop_duplicates("ds", keep="last")
+
+    # set index
     df.set_index("ds", inplace=True)
+
     # reindex monthly continuous range
     idx = pd.date_range(df.index.min(), df.index.max(), freq='MS')
+
+    # fill missing months with 0
     df = df.reindex(idx, fill_value=0)
+
+    # return as Series
     series = df["y"]
     series.index.name = "ds"
     return series
 
+# Create lag features for supervised learning
 def create_lag_features(series: pd.Series, n_lags=12):
     """
     Create supervised dataset from monthly series using lags.
     """
+    # Build DataFrame with lag features
     df = pd.DataFrame({"y": series})
     for lag in range(1, n_lags + 1):
         df[f"lag_{lag}"] = df["y"].shift(lag)
     df = df.dropna()
     return df
+
+# Model training, loading, and forecasting ------------------------
+
+# Train model for a given product_id
+# Fetch historical sales
+    # 1) load history
+    # Fetch monthly sales data
+    # 2) prepare DataFrame
+    # 3) train model
+    # 4) save model with metadata
+    # 5) return model path
+    # If very short series, save simple mean predictor
 
 def train_model_for_product(product_id: int):
     """
@@ -112,6 +165,7 @@ def train_model_for_product(product_id: int):
     monthly = fetch_monthly_sales(product_id)
     series = prepare_dataframe(monthly)
 
+    # Check if we have enough data to train a model (at least some data)
     if series.empty:
         raise HTTPException(status_code=404, detail="No historical sales data available for this product.")
 
@@ -119,6 +173,7 @@ def train_model_for_product(product_id: int):
     if len(series) < 6:
         # Save simple mean predictor as dict -> joblib
         mean_val = float(series.mean())
+        # Save with metadata (last index) 
         model_path = os.path.join(MODELS_DIR, f"{product_id}.mean.joblib")
         dump({"type": "mean", "mean": mean_val, "last_index": series.index.max().to_pydatetime()}, model_path)
         return model_path
@@ -139,12 +194,17 @@ def train_model_for_product(product_id: int):
     dump({"type": "rf", "model": model, "n_lags": n_lags, "last_index": series.index.max().to_pydatetime()}, model_path)
     return model_path
 
+# Load model from disk
 def load_model(product_id: int):
     """
     Load model file if exists. Return dict with metadata.
     """
+
+    # Check for both RandomForest and mean predictor
     p1 = os.path.join(MODELS_DIR, f"{product_id}.pkl")
     p2 = os.path.join(MODELS_DIR, f"{product_id}.mean.joblib")
+
+    # Try RandomForest first
     if os.path.exists(p1):
         data = load(p1)
         return data
@@ -153,6 +213,7 @@ def load_model(product_id: int):
         return data
     return None
 
+# Forecast using loaded model or train-on-the-fly if needed
 def forecast_using_model(product_id: int, months: int = 3):
     """
     Predict next `months` months of demand (units) using saved model or train-on-the-fly.
@@ -212,6 +273,8 @@ def forecast_using_model(product_id: int, months: int = 3):
 
 # API endpoints --------------------------------------------------
 
+# Train model endpoint 
+# POST /train/{product_id}
 @app.post("/train/{product_id}")
 def train(product_id: int):
     """
@@ -220,6 +283,8 @@ def train(product_id: int):
     path = train_model_for_product(product_id)
     return {"status": "trained", "model_path": path}
 
+# Price endpoint
+# GET /price?product_id=123
 @app.get("/price")
 async def get_price(product_id: int = Query(...)):
     """
@@ -229,6 +294,8 @@ async def get_price(product_id: int = Query(...)):
     """
     return await get_price_async(product_id)
 
+# Forecast endpoint
+# GET /forecast?product_id=123&months=3
 @app.get("/forecast", response_model=PredictionResponse)
 def forecast(product_id: int, months: int = Query(3, ge=1, le=24)):
     """
@@ -249,6 +316,9 @@ def forecast(product_id: int, months: int = Query(3, ge=1, le=24)):
         if BILLWISE_API_KEY:
             headers["Authorization"] = f"Bearer {BILLWISE_API_KEY}"
         
+        # Fetch product details
+        # Use httpx sync client
+        # Note: in production, consider using async FastAPI endpoint for better performance
         with httpx.Client(timeout=5.0) as client:
             p = client.get(f"{BILLWISE_BASE}/api/products/{product_id}", headers=headers)
             if p.status_code == 200:
@@ -265,9 +335,12 @@ def forecast(product_id: int, months: int = Query(3, ge=1, le=24)):
         # Gracefully degrade: proceed with unit_price = None
         unit_price = None
 
+    # Build daily predictions from monthly preds (for compatibility)
     today = datetime.date.today()
     daily_preds = []
     total_revenue = 0.0
+
+    # Expand monthly preds into daily entries (same value for each day in month)
     for dt, units in preds:
         revenue = units * (unit_price if unit_price is not None else 0.0)
         total_revenue += revenue
@@ -281,6 +354,8 @@ def forecast(product_id: int, months: int = Query(3, ge=1, le=24)):
         dailyPredictions=daily_preds
     )
 
+# Train all products endpoint
+# POST /train-all
 @app.post("/train-all")
 def train_all_products():
     """
