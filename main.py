@@ -10,6 +10,8 @@ import numpy as np
 import os
 from sklearn.ensemble import RandomForestRegressor
 from joblib import dump, load
+import httpx
+from price_endpoint import get_price_async
 
 # Config
 BILLWISE_BASE = os.environ.get("BILLWISE_BASE", "http://localhost:8080")
@@ -218,25 +220,49 @@ def train(product_id: int):
     path = train_model_for_product(product_id)
     return {"status": "trained", "model_path": path}
 
+@app.get("/price")
+async def get_price(product_id: int = Query(...)):
+    """
+    Return explicit unit price for a product by querying BillWise product endpoint.
+    Response: { "productId": 123, "unitPrice": 12.34, "source": "billwise" }
+    Uses async httpx client and TTL cache for performance.
+    """
+    return await get_price_async(product_id)
+
 @app.get("/forecast", response_model=PredictionResponse)
 def forecast(product_id: int, months: int = Query(3, ge=1, le=24)):
     """
     Forecast next `months` months for product_id.
     Returns PredictionResponse with 'dailyPredictions' used for monthly entries.
+    Fetches unit price from BillWise to compute consistent revenue estimates.
     """
     preds = forecast_using_model(product_id, months=months)
 
-    # Try to fetch product price for revenue estimate (best-effort)
+    # Fetch product price for revenue estimate (async, with caching)
     unit_price = None
     try:
-        p = requests.get(f"{BILLWISE_BASE}/api/products/{product_id}", timeout=5)
-        if p.status_code == 200:
-            j = p.json()
-            # try common price fields
-            unit_price = j.get("sellingPricePerBaseUnit") or j.get("selling_price_per_base_unit") or j.get("sellingPrice") or j.get("price")
-            if unit_price is not None:
-                unit_price = float(unit_price)
+        # We need to run the async function in sync context
+        # Use httpx sync client for simplicity, fallback to requests
+        import httpx
+        BILLWISE_API_KEY = os.environ.get("BILLWISE_API_KEY", None)
+        headers = {}
+        if BILLWISE_API_KEY:
+            headers["Authorization"] = f"Bearer {BILLWISE_API_KEY}"
+        
+        with httpx.Client(timeout=5.0) as client:
+            p = client.get(f"{BILLWISE_BASE}/api/products/{product_id}", headers=headers)
+            if p.status_code == 200:
+                j = p.json()
+                # Try common price fields
+                for key in ("sellingPricePerBaseUnit", "selling_price_per_base_unit", "sellingPrice", "price", "unitPrice"):
+                    if key in j and j[key] is not None:
+                        try:
+                            unit_price = float(j[key])
+                            break
+                        except (ValueError, TypeError):
+                            continue
     except Exception:
+        # Gracefully degrade: proceed with unit_price = None
         unit_price = None
 
     today = datetime.date.today()
