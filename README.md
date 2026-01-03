@@ -1,150 +1,146 @@
-✨ Features
+## 📥 Clone the Repository
 
-📈 Demand forecasting using Random Forest Regressor
-
-🧠 Lag-based time-series feature engineering
-
-🔁 Automatic fallback for sparse data
-
-💾 Forecast persistence into BillWise backend
-
-📊 Accuracy evaluation using MAE & RMSE
-
-🧮 Revenue estimation using real product prices
-
-🚀 FastAPI-based REST service
-
-⚡ Async price lookup with TTL caching
-
-🔗 Seamless integration with Spring Boot backend
-
-🏗️ Architecture Overview
-BillWise Backend (Spring Boot)
-        ↑        ↓
- REST APIs (JSON)
-        ↑        ↓
-BillWise ML Service (FastAPI + Python)
-
-📁 Project Structure
-billwise-forecast-service/
-├── main.py                 # FastAPI app + ML logic
-├── price_endpoint.py       # Async product price lookup
-├── test_endpoints.py       # Quick API test script
-├── requirements.txt        # Python dependencies
-├── models/                 # Saved ML models
-└── README.md               # This file
-
-🧰 Prerequisites
-
-Make sure the following are installed:
-
-Python 3.9+
-
-Git
-
-BillWise Backend running (Spring Boot)
-
-Check Python version:
-
-python --version
-
-📥 Clone the Repository
+```bash
 git clone https://github.com/<your-username>/billwise-forecast-service.git
 cd billwise-forecast-service
+```
 
-🧪 Set Up Virtual Environment
-Create virtual environment
+---
+
+## 🧪 Create Virtual Environment
+
+```bash
 python -m venv venv
+```
 
-Activate virtual environment
+### Activate Virtual Environment
 
-Windows (PowerShell):
+**Windows (PowerShell):**
 
+```powershell
 .\venv\Scripts\Activate.ps1
+```
 
+**Windows (CMD):**
 
-Windows (CMD):
-
+```cmd
 venv\Scripts\activate
+```
 
+**Linux / macOS:**
 
-Linux / macOS:
-
+```bash
 source venv/bin/activate
-
+```
 
 You should see:
 
+```
 (venv)
+```
 
-📦 Install Dependencies
+---
+
+## 📦 Install Dependencies
+
+```bash
 pip install -r requirements.txt
+```
 
-⚙️ Environment Variables
+---
 
-The ML service needs to know where the BillWise backend is running.
+## ⚙️ Environment Variables
 
-Required
+The ML service communicates with the BillWise backend.
+
+### Required
+
+```bash
 BILLWISE_BASE=http://localhost:8080
+```
 
-Optional
-BILLWISE_API_KEY=your_api_token_here
+### Optional
+
+```bash
+BILLWISE_API_KEY=your_api_token
 PRICE_CACHE_TTL_SECONDS=300
+```
 
-Set variables
+#### Set Environment Variables
 
-Windows (PowerShell):
+**Windows (PowerShell):**
 
+```powershell
 $env:BILLWISE_BASE="http://localhost:8080"
+```
 
+**Linux / macOS:**
 
-Linux / macOS:
-
+```bash
 export BILLWISE_BASE=http://localhost:8080
+```
 
-▶️ Run the ML Service
+---
+
+## ▶️ Run the ML Service
+
+```bash
 uvicorn main:app --reload --port 5000
-
+```
 
 Expected output:
 
+```
 Uvicorn running on http://127.0.0.1:5000
 Application startup complete.
+```
 
-📖 API Documentation
+---
+
+## 📖 API Documentation (Swagger)
 
 Open in browser:
 
+```
 http://127.0.0.1:5000/docs
+```
 
+---
 
-Swagger UI will show all available endpoints.
+## 🔌 Available Endpoints
 
-🔌 Available Endpoints
-🔹 Train Model
+### Train model for a product
+
+```
 POST /train/{product_id}
+```
 
-🔹 Train All Products
+### Train models for all products
+
+```
 POST /train-all
+```
 
-🔹 Forecast Demand
+### Forecast demand
+
+```
 GET /forecast?product_id=1&months=3
+```
 
-🔹 Get Product Price
+### Fetch product price
+
+```
 GET /price?product_id=1
+```
 
-📊 Evaluation Metrics
+---
 
-Uses temporal 80/20 train-test split
+## 📊 Forecast Evaluation
 
-Computes:
+* Uses **time-aware 80/20 train–test split**
+* Evaluation metrics:
 
-Mean Absolute Error (MAE)
+  * Mean Absolute Error (MAE)
+  * Root Mean Squared Error (RMSE)
+* Metrics are persisted in the BillWise backend
 
-Root Mean Squared Error (RMSE)
-
-Metrics are persisted into BillWise backend
-
-Help you tag a research release
-
-Just tell me 👍
