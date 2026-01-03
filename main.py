@@ -19,6 +19,8 @@ import os
 
 # ML model
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+import math
 
 # model persistence
 from joblib import dump, load
@@ -146,6 +148,39 @@ def create_lag_features(series: pd.Series, n_lags=12):
     df = df.dropna()
     return df
 
+
+def evaluate_model(series, model_data):
+    """
+    Returns MAE and RMSE using last 20% of data
+    """
+    split = int(len(series) * 0.8)
+    train = series[:split]
+    test = series[split:]
+
+    if len(test) == 0:
+        return None, None
+
+    n_lags = model_data.get("n_lags", 1)
+    model = model_data.get("model")
+
+    history = list(train.values)
+    preds = []
+
+    for actual in test.values:
+        if len(history) < n_lags:
+            X = [0] * n_lags
+        else:
+            X = history[-n_lags:]
+
+        yhat = model.predict([X])[0]
+        preds.append(yhat)
+        history.append(actual)
+
+    mae = mean_absolute_error(test.values, preds)
+    rmse = math.sqrt(mean_squared_error(test.values, preds))
+
+    return mae, rmse
+
 # Model training, loading, and forecasting ------------------------
 
 # Train model for a given product_id
@@ -191,7 +226,33 @@ def train_model_for_product(product_id: int):
 
     # Save with metadata (n_lags & last index)
     model_path = os.path.join(MODELS_DIR, f"{product_id}.pkl")
-    dump({"type": "rf", "model": model, "n_lags": n_lags, "last_index": series.index.max().to_pydatetime()}, model_path)
+    model_data = {"type": "rf", "model": model, "n_lags": n_lags, "last_index": series.index.max().to_pydatetime()}
+    dump(model_data, model_path)
+
+    # Evaluate model (if possible) and POST metrics back to BillWise
+    try:
+        mae, rmse = evaluate_model(series, model_data)
+        if mae is not None:
+            payload = {
+                "productId": product_id,
+                "mae": mae,
+                "rmse": rmse,
+                "modelType": "RF",
+                "evaluatedAt": datetime.datetime.utcnow().isoformat()
+            }
+            try:
+                requests.post(
+                    f"{BILLWISE_BASE}/api/ai/forecast-metrics",
+                    json=payload,
+                    timeout=5
+                )
+            except Exception:
+                # Don't fail training if metrics POST fails
+                pass
+    except Exception:
+        # If evaluation fails for any reason, skip metrics
+        pass
+
     return model_path
 
 # Load model from disk
@@ -344,6 +405,25 @@ def forecast(product_id: int, months: int = Query(3, ge=1, le=24)):
     for dt, units in preds:
         revenue = units * (unit_price if unit_price is not None else 0.0)
         total_revenue += revenue
+
+        payload = {
+            "productId": product_id,
+            "forecastMonth": dt.isoformat(),
+            "predictedUnits": int(units),
+            "predictedRevenue": float(revenue),
+            "modelType": "RF",
+            "generatedAt": datetime.datetime.utcnow().isoformat()
+        }
+
+        try:
+            requests.post(
+                f"{BILLWISE_BASE}/api/ai/forecast-results",
+                json=payload,
+                timeout=5
+            )
+        except Exception as e:
+            print("Failed to persist forecast:", e)
+
         daily_preds.append({"date": dt, "predictedUnits": int(units), "predictedRevenue": float(revenue)})
 
     return PredictionResponse(
