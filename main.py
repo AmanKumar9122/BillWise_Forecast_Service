@@ -298,9 +298,10 @@ def forecast_using_model(product_id: int, months: int = 3):
     if model_data.get("type") == "mean":
         mean_val = float(model_data["mean"])
         last_dt = pd.to_datetime(model_data.get("last_index"))
+        forecast_anchor = max(last_dt, pd.Timestamp.today().normalize().replace(day=1))
         preds = []
         for i in range(1, months + 1):
-            dt = (last_dt + pd.DateOffset(months=i)).date()
+            dt = (forecast_anchor + pd.DateOffset(months=i)).date()
             preds.append((dt, int(round(mean_val))))
         return preds
 
@@ -309,6 +310,7 @@ def forecast_using_model(product_id: int, months: int = 3):
     n_lags = int(model_data["n_lags"])
     # Build last n_lags values as feature vector
     last_index = pd.to_datetime(model_data["last_index"])
+    forecast_anchor = max(last_index, pd.Timestamp.today().normalize().replace(day=1))
     # Ensure series has continuous months up to last_index (it should)
     series = series.asfreq('MS').fillna(0)
     vals = list(series.values)
@@ -325,7 +327,7 @@ def forecast_using_model(product_id: int, months: int = 3):
         X_pred = np.array(input_vec).reshape(1, -1)
         yhat = model.predict(X_pred)[0]
         yhat = max(0, float(round(yhat)))
-        next_dt = (last_index + pd.DateOffset(months=i)).date()
+        next_dt = (forecast_anchor + pd.DateOffset(months=i)).date()
         preds.append((next_dt, int(yhat)))
         # append predicted value to current for multi-step forecasting
         current.append(yhat)
